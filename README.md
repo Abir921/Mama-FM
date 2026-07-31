@@ -24,14 +24,22 @@ Discord bot: music, memes, polls, Valorant stats. All commands live under `/mama
    - `HENRIK_API_KEY` — for Valorant commands ([docs.henrikdev.xyz](https://docs.henrikdev.xyz), free tier is fine).
 
 4. **Lavalink** (music only) — needs Java 17+:
-   - Download `Lavalink.jar` from [github.com/lavalink-devs/Lavalink/releases](https://github.com/lavalink-devs/Lavalink/releases) into `lavalink/`.
-   - Run it from that folder (it picks up `application.yml` automatically):
-     ```
-     cd lavalink
-     java -jar Lavalink.jar
-     ```
-   - The bundled `application.yml` enables the YouTube plugin and matches the defaults in `.env.example`.
-   - Everything except music works fine with Lavalink down.
+   ```
+   .\start-lavalink.ps1
+   ```
+   The script finds a JDK 17+ (checking `JAVA_HOME` first) and launches
+   `lavalink/Lavalink.jar`, which picks up `lavalink/application.yml` automatically.
+   Wait for `Lavalink is ready to accept connections.`
+
+   - If `Lavalink.jar` is missing, download it from
+     [github.com/lavalink-devs/Lavalink/releases](https://github.com/lavalink-devs/Lavalink/releases)
+     into `lavalink/`. It is ~96 MB and deliberately not committed.
+   - The YouTube source plugin is downloaded automatically on first start.
+     If playback starts failing, bump the `youtube-plugin` version in
+     `application.yml` — YouTube breaks old extractors periodically and Lavalink
+     logs a warning when a newer one exists.
+   - Run Lavalink **before** the bot, and keep it running alongside.
+     Everything except music works fine with Lavalink down.
 
 5. **Run the bot**:
    ```

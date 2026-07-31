@@ -6,3 +6,4 @@ mama.db
 lavalink/Lavalink.jar
 lavalink/logs/
 lavalink/plugins/
+lavalink/.plugins.json
