@@ -61,6 +61,35 @@ Discord bot: music, memes, polls, Valorant stats. All commands live under `/mama
 | `/mama valo link <name#tag>` | Link your Riot ID |
 | `/mama valo stats [@user]` · `compare` · `leaderboard` | Live Valorant stats |
 
+## Music sources & the YouTube login wall
+
+YouTube now refuses anonymous audio extraction. Search and metadata still work,
+but starting playback fails with:
+
+```
+Client [ANDROID_VR] failed: This video requires login.
+Client [WEB]        failed: This video requires login.
+AllClientsFailedException: All clients failed to load the item.
+```
+
+This is YouTube blocking unauthenticated clients, not a bug in the bot or in
+Lavalink. Because of it, `MUSIC_SOURCE` defaults to `soundcloud`, which needs no
+authentication. `MUSIC_FALLBACK=1` additionally retries any failed track on
+SoundCloud and posts a notice in the channel, so a blocked track degrades
+loudly instead of playing silence.
+
+To use YouTube, authenticate the source plugin — either is a one-time setup:
+
+- **OAuth**: add `youtube: { oauth: { enabled: true } }` under `plugins:` in
+  `lavalink/application.yml` and restart. Lavalink prints a device code to link
+  a Google account. Use a throwaway account — the token is stored on disk and
+  a flagged account affects that account.
+- **poToken**: generate `poToken` + `visitorData` with
+  [youtube-trusted-session-generator](https://github.com/iv-org/youtube-trusted-session-generator)
+  and set them under the `youtube` plugin config.
+
+Then set `MUSIC_SOURCE=youtube` in `.env`.
+
 Notes:
 - Bot auto-leaves voice after `VOICE_IDLE_MINUTES` (default 5) alone in a channel.
 - Poll data and Riot ID links are stored in `mama.db` (SQLite, auto-created).

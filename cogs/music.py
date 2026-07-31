@@ -15,6 +15,21 @@ from discord.ext import commands
 
 log = logging.getLogger("mamafm.music")
 
+# YouTube increasingly refuses anonymous audio extraction ("This video requires
+# login"), even though its search/metadata stays public. SoundCloud needs no
+# auth, so it doubles as the default fallback when a YouTube track won't play.
+SOURCES = {
+    "youtube": wavelink.TrackSource.YouTube,
+    "youtubemusic": wavelink.TrackSource.YouTubeMusic,
+    "soundcloud": wavelink.TrackSource.SoundCloud,
+}
+FALLBACK_SOURCE = wavelink.TrackSource.SoundCloud
+
+# Individual tracks often can't be streamed even when the source works: SoundCloud
+# serves some tracks only as encrypted HLS, and some transcodings simply 404. So on
+# failure we walk to the next search result rather than retrying the same one.
+MAX_PLAY_ATTEMPTS = 4
+
 
 def _fmt_ms(ms: int) -> str:
     s = ms // 1000
@@ -28,6 +43,10 @@ class Music(commands.Cog):
         self.bot = bot
         self.idle_minutes = int(os.getenv("VOICE_IDLE_MINUTES", "5"))
         self._idle_tasks: dict[int, asyncio.Task] = {}  # guild_id -> pending disconnect
+        self.source = SOURCES.get(
+            os.getenv("MUSIC_SOURCE", "").strip().lower(), wavelink.TrackSource.YouTubeMusic
+        )
+        self.fallback = os.getenv("MUSIC_FALLBACK", "1").strip().lower() not in ("0", "false", "no")
 
     async def cog_load(self) -> None:
         # Pool.connect keeps retrying while Lavalink is down, so run it in the
@@ -79,6 +98,84 @@ class Music(commands.Cog):
     async def on_wavelink_track_end(self, payload: wavelink.TrackEndEventPayload) -> None:
         # AutoPlayMode.partial advances the queue automatically; nothing to do here.
         pass
+
+    async def _next_candidate(self, query: str, tried: list[str]) -> wavelink.Playable | None:
+        """Next search result not yet attempted, preferring the configured source."""
+        sources = [self.source]
+        if FALLBACK_SOURCE != self.source:
+            sources.append(FALLBACK_SOURCE)
+
+        for source in sources:
+            try:
+                results = await wavelink.Playable.search(query, source=source)
+            except Exception:
+                continue
+            if not results or isinstance(results, wavelink.Playlist):
+                continue
+            for candidate in results:
+                if candidate.identifier not in tried:
+                    return candidate
+        return None
+
+    async def _announce(self, player: wavelink.Player, message: str) -> None:
+        channel = getattr(player, "home", None)
+        if channel is None:
+            return
+        try:
+            await channel.send(message)
+        except discord.HTTPException:
+            log.warning("Couldn't post playback notice to %s", channel)
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_exception(self, payload: wavelink.TrackExceptionEventPayload) -> None:
+        """A track failed mid-load. Retry once on the fallback source, else say so.
+
+        Without this the user just sees "Queued ..." and then silence, because the
+        failure happens asynchronously long after the command has replied.
+        """
+        player, track = payload.player, payload.track
+        # exception is a TypedDict (message/severity/cause), not an object.
+        exc = payload.exception or {}
+        cause = exc.get("message") or exc.get("cause") or "unknown error"
+        log.warning("Track failed: %s [%s] — %s", track.title, track.source, cause)
+
+        if player is None:
+            return
+
+        extras = dict(getattr(track, "extras", None) or {})
+        query = extras.get("query")
+
+        tried: list[str] = list(extras.get("tried") or [])
+        if track.identifier not in tried:
+            tried.append(track.identifier)
+
+        if self.fallback and query and len(tried) < MAX_PLAY_ATTEMPTS:
+            alt = await self._next_candidate(query, tried)
+            if alt is not None:
+                alt.extras = {**extras, "tried": tried}
+                await self._announce(
+                    player,
+                    f"⚠️ **{track.title}** wouldn't play ({cause}). "
+                    f"Trying **{alt.title}** from `{alt.source}` instead.",
+                )
+                await player.play(alt)
+                return
+
+        await self._announce(
+            player, f"❌ Couldn't play **{track.title}** from `{track.source}` — {cause}"
+        )
+        if not player.queue.is_empty:
+            await player.play(player.queue.get())
+
+    @commands.Cog.listener()
+    async def on_wavelink_track_stuck(self, payload: wavelink.TrackStuckEventPayload) -> None:
+        player, track = payload.player, payload.track
+        log.warning("Track stuck: %s", track.title)
+        if player is None:
+            return
+        await self._announce(player, f"⏭️ **{track.title}** stalled — skipping.")
+        if not player.queue.is_empty:
+            await player.play(player.queue.get())
 
     @commands.Cog.listener()
     async def on_voice_state_update(
@@ -136,18 +233,26 @@ class Music(commands.Cog):
                 return await interaction.followup.send("Couldn't join your voice channel.")
             player.autoplay = wavelink.AutoPlayMode.partial  # advance queue, no recommendations
 
+        # Where playback problems get reported, since they surface long after this reply.
+        player.home = interaction.channel
+
         try:
-            tracks = await wavelink.Playable.search(query)
+            tracks = await wavelink.Playable.search(query, source=self.source)
         except wavelink.LavalinkLoadException:
             return await interaction.followup.send("Failed to load that — bad link or unsupported source.")
         if not tracks:
             return await interaction.followup.send(f"No results for `{query}`.")
 
+        # Keep the query on the track so a failed load can advance to another result.
+        extras = {"query": query, "requested_by": interaction.user.id, "tried": []}
+
         if isinstance(tracks, wavelink.Playlist):
+            tracks.extras = extras
             added = await player.queue.put_wait(tracks)
             msg = f"Queued playlist **{tracks.name}** ({added} tracks)."
         else:
             track = tracks[0]
+            track.extras = extras
             await player.queue.put_wait(track)
             msg = f"Queued **{track.title}** ({_fmt_ms(track.length)})."
 
