@@ -1,0 +1,31 @@
+server:
+  port: 2333
+  address: 127.0.0.1
+
+lavalink:
+  server:
+    password: "youshallnotpass"
+    sources:
+      youtube: false   # built-in source is deprecated; youtube-plugin below replaces it
+      soundcloud: true
+      bandcamp: true
+      twitch: true
+      vimeo: true
+      http: true
+  plugins:
+    - dependency: "dev.lavalink.youtube:youtube-plugin:1.13.5"
+      repository: "https://maven.lavalink.dev/releases"
+
+plugins:
+  youtube:
+    enabled: true
+    clients:
+      - MUSIC
+      - ANDROID_VR
+      - WEB
+      - WEBEMBEDDED
+
+logging:
+  level:
+    root: INFO
+    lavalink: INFO

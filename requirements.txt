@@ -1,0 +1,5 @@
+discord.py>=2.6
+wavelink>=3.4
+python-dotenv>=1.0
+aiosqlite>=0.20
+Pillow>=10.0
