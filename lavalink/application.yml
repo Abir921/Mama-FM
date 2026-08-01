@@ -19,7 +19,16 @@ lavalink:
 plugins:
   youtube:
     enabled: true
+    oauth:
+      # Read from the environment so the token never lands in this committed
+      # file. start-lavalink.ps1 exports it from .env, which is gitignored.
+      # Leave YOUTUBE_REFRESH_TOKEN unset to be prompted with a device code.
+      enabled: true
+      refreshToken: "${YOUTUBE_REFRESH_TOKEN:}"
+      skipInitialization: false
     clients:
+      # TV is the OAuth-compatible client; without it the token is never used.
+      - TV
       - MUSIC
       - ANDROID_VR
       - WEB

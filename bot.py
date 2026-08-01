@@ -31,12 +31,16 @@ class MamaBot(commands.Bot):
             name="mama", description="Mama FM commands"
         )
 
-    async def setup_hook(self) -> None:
+    async def _load_tree(self) -> None:
+        """Populate the command tree. Shared with sync_commands.py."""
         await db.init()
         for ext in EXTENSIONS:
             await self.load_extension(ext)
             log.info("Loaded extension %s", ext)
         self.tree.add_command(self.mama)
+
+    async def setup_hook(self) -> None:
+        await self._load_tree()
 
         guild_id = os.getenv("GUILD_ID")
         if guild_id:

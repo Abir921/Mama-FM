@@ -7,6 +7,7 @@ Auto-disconnects after VOICE_IDLE_MINUTES alone in a voice channel.
 import asyncio
 import logging
 import os
+import re
 
 import discord
 import wavelink
@@ -29,6 +30,76 @@ FALLBACK_SOURCE = wavelink.TrackSource.SoundCloud
 # serves some tracks only as encrypted HLS, and some transcodings simply 404. So on
 # failure we walk to the next search result rather than retrying the same one.
 MAX_PLAY_ATTEMPTS = 4
+
+
+def _is_url(query: str) -> bool:
+    return query.strip().lower().startswith(("http://", "https://"))
+
+
+def _is_preview(track: wavelink.Playable) -> bool:
+    """True for SoundCloud 30-second previews (policy=SNIP).
+
+    These advertise the full duration in their metadata but only serve a short
+    clip, so they play normally and then cut out partway through. Their stream
+    URL uses /preview/ where a full track uses /stream/.
+    """
+    return "/preview/" in (track.identifier or "")
+
+
+def _pick_track(tracks: list[wavelink.Playable]) -> wavelink.Playable:
+    """First fully playable result, falling back to the top hit."""
+    return next((t for t in tracks if not _is_preview(t)), tracks[0])
+
+
+def _query_variants(track: wavelink.Playable) -> list[str]:
+    """Progressively simpler search terms for finding a track on another source.
+
+    Uploaded titles are messy ("Song A/Song B (SEAMLESS TRANSITION) - Artist x
+    Artist") and on YouTube ``author`` is the uploading channel rather than the
+    artist, so searching either verbatim usually returns nothing. Strip the noise
+    down and try the plainest forms first.
+    """
+    title = (track.title or "").strip()
+    author = (track.author or "").strip()
+
+    # Drop "(Official Video)", "[4K]" and similar.
+    cleaned = re.sub(r"[\(\[][^\)\]]*[\)\]]", " ", title)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -–—")
+
+    # "Song - Artist": keep the first song of a mashup and the first artist.
+    song, _, rest = cleaned.partition(" - ")
+    song = re.split(r"\s*[/|]\s*", song)[0].strip()
+    artist = re.split(r"\s+x\s+|,|&|feat\.?|ft\.?", rest, flags=re.I)[0].strip() if rest else ""
+
+    variants = [
+        f"{song} {artist}".strip() if song and artist else "",
+        song,
+        f"{song} {author}".strip() if song and author else "",
+        cleaned,
+        title,
+    ]
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for v in variants:
+        v = v.strip()
+        if v and v.lower() not in seen:
+            seen.add(v.lower())
+            out.append(v)
+    return out
+
+
+def _short_reason(cause: str, limit: int = 180) -> str:
+    """First meaningful line of a Lavalink error.
+
+    Lavalink returns full Java stack traces; posting one raw can exceed
+    Discord's 2000 character message limit and fail to send at all.
+    """
+    for line in (cause or "").splitlines():
+        line = line.strip()
+        if line and not line.startswith("at "):
+            return line[:limit] + ("…" if len(line) > limit else "")
+    return "unknown error"
 
 
 def _fmt_ms(ms: int) -> str:
@@ -99,23 +170,40 @@ class Music(commands.Cog):
         # AutoPlayMode.partial advances the queue automatically; nothing to do here.
         pass
 
-    async def _next_candidate(self, query: str, tried: list[str]) -> wavelink.Playable | None:
+    async def _next_candidate(
+        self, query: str, tried: list[str], failed: wavelink.Playable | None = None
+    ) -> wavelink.Playable | None:
         """Next search result not yet attempted, preferring the configured source."""
+        # A URL always resolves back to the same track on every source, so once it
+        # fails there is nothing left to walk. Search the title instead.
+        queries = [query]
+        if _is_url(query) and failed is not None:
+            queries = _query_variants(failed)
+
         sources = [self.source]
         if FALLBACK_SOURCE != self.source:
             sources.append(FALLBACK_SOURCE)
 
-        for source in sources:
-            try:
-                results = await wavelink.Playable.search(query, source=source)
-            except Exception:
-                continue
-            if not results or isinstance(results, wavelink.Playlist):
-                continue
-            for candidate in results:
-                if candidate.identifier not in tried:
+        preview_fallback: wavelink.Playable | None = None
+
+        for text in queries:
+            for source in sources:
+                try:
+                    results = await wavelink.Playable.search(text, source=source)
+                except Exception:
+                    continue
+                if not results or isinstance(results, wavelink.Playlist):
+                    continue
+                for candidate in results:
+                    if candidate.identifier in tried:
+                        continue
+                    if _is_preview(candidate):
+                        # Keep as a last resort; 30s of audio beats nothing.
+                        preview_fallback = preview_fallback or candidate
+                        continue
                     return candidate
-        return None
+
+        return preview_fallback
 
     async def _announce(self, player: wavelink.Player, message: str) -> None:
         channel = getattr(player, "home", None)
@@ -136,8 +224,9 @@ class Music(commands.Cog):
         player, track = payload.player, payload.track
         # exception is a TypedDict (message/severity/cause), not an object.
         exc = payload.exception or {}
-        cause = exc.get("message") or exc.get("cause") or "unknown error"
-        log.warning("Track failed: %s [%s] — %s", track.title, track.source, cause)
+        cause = _short_reason(exc.get("message") or exc.get("cause") or "")
+        # Full trace goes to the log; the channel gets the one-line version.
+        log.warning("Track failed: %s [%s] — %s", track.title, track.source, exc)
 
         if player is None:
             return
@@ -150,7 +239,7 @@ class Music(commands.Cog):
             tried.append(track.identifier)
 
         if self.fallback and query and len(tried) < MAX_PLAY_ATTEMPTS:
-            alt = await self._next_candidate(query, tried)
+            alt = await self._next_candidate(query, tried, failed=track)
             if alt is not None:
                 alt.extras = {**extras, "tried": tried}
                 await self._announce(
@@ -251,7 +340,7 @@ class Music(commands.Cog):
             added = await player.queue.put_wait(tracks)
             msg = f"Queued playlist **{tracks.name}** ({added} tracks)."
         else:
-            track = tracks[0]
+            track = _pick_track(list(tracks))
             track.extras = extras
             await player.queue.put_wait(track)
             msg = f"Queued **{track.title}** ({_fmt_ms(track.length)})."

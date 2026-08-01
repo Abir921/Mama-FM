@@ -39,6 +39,19 @@ if (-not $java) {
 }
 
 Write-Host "Using: $java"
+
+# Export secrets from .env so application.yml can reference them via ${VAR}
+# placeholders and stay free of credentials.
+$envFile = Join-Path $PSScriptRoot ".env"
+if (Test-Path $envFile) {
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match '^\s*(YOUTUBE_REFRESH_TOKEN)\s*=\s*(.+?)\s*$') {
+            Set-Item -Path "Env:$($Matches[1])" -Value $Matches[2].Trim('"')
+            Write-Host "Loaded $($Matches[1]) from .env"
+        }
+    }
+}
+
 Set-Location (Join-Path $PSScriptRoot "lavalink")
 
 if (-not (Test-Path "Lavalink.jar")) {
