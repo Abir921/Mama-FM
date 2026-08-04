@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS valorant_accounts (
     riot_name       TEXT NOT NULL,
     riot_tag        TEXT NOT NULL,
     region          TEXT NOT NULL,
-    linked_at       TEXT NOT NULL
+    linked_at       TEXT NOT NULL,
+    puuid           TEXT,                        -- stable id; names/tags can change
+    platform        TEXT NOT NULL DEFAULT 'pc'
 );
 
 CREATE TABLE IF NOT EXISTS guild_settings (
@@ -35,9 +37,25 @@ CREATE TABLE IF NOT EXISTS guild_settings (
 """
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS won't add
+# them to a database that already exists, so apply them separately.
+MIGRATIONS = {
+    "valorant_accounts": {
+        "puuid": "ALTER TABLE valorant_accounts ADD COLUMN puuid TEXT",
+        "platform": "ALTER TABLE valorant_accounts ADD COLUMN platform TEXT NOT NULL DEFAULT 'pc'",
+    },
+}
+
+
 async def init() -> None:
     async with aiosqlite.connect(DB_PATH) as conn:
         await conn.executescript(SCHEMA)
+        for table, columns in MIGRATIONS.items():
+            async with conn.execute(f"PRAGMA table_info({table})") as cur:
+                existing = {row[1] for row in await cur.fetchall()}
+            for column, ddl in columns.items():
+                if column not in existing:
+                    await conn.execute(ddl)
         await conn.commit()
 
 
