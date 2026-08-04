@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.git/
+.gitignore
+mama.db
+lavalink/Lavalink.jar
+lavalink/plugins/
+lavalink/logs/
+lavalink/.plugins.json
+*.md

@@ -148,6 +148,37 @@ class Music(commands.Cog):
             n.status is wavelink.NodeStatus.CONNECTED for n in wavelink.Pool.nodes.values()
         )
 
+    @staticmethod
+    def _channel_problem(channel: discord.VoiceChannel, me: discord.Member) -> str | None:
+        """Why the bot can't join this channel, or None if it can.
+
+        Server-wide permissions from the invite are routinely overridden per
+        channel, so this has to be checked against the specific channel.
+        """
+        perms = channel.permissions_for(me)
+        missing = [
+            name
+            for name, ok in (
+                ("View Channel", perms.view_channel),
+                ("Connect", perms.connect),
+                ("Speak", perms.speak),
+            )
+            if not ok
+        ]
+        if missing:
+            return (
+                f"I don't have permission to join **{channel.name}** — missing "
+                f"{', '.join(f'`{m}`' for m in missing)}.\n"
+                "Ask a server admin to allow those for me on that channel, "
+                "or use a channel where I already have access."
+            )
+        if channel.user_limit and len(channel.members) >= channel.user_limit:
+            return (
+                f"**{channel.name}** is full ({len(channel.members)}/{channel.user_limit}). "
+                "Bots need a free slot unless they have `Move Members`."
+            )
+        return None
+
     def _player(self, interaction: discord.Interaction) -> wavelink.Player | None:
         vc = interaction.guild.voice_client
         return vc if isinstance(vc, wavelink.Player) else None
@@ -312,11 +343,24 @@ class Music(commands.Cog):
         if not interaction.user.voice or not interaction.user.voice.channel:
             return await self._reply(interaction, "Join a voice channel first.", ephemeral=True)
 
+        channel = interaction.user.voice.channel
+
+        # Check access up front. Without it discord.py waits the full 30s for a
+        # voice handshake that a permission-denied channel will never complete.
+        if problem := self._channel_problem(channel, interaction.guild.me):
+            return await self._reply(interaction, problem, ephemeral=True)
+
         await interaction.response.defer()
         player = self._player(interaction)
         if player is None:
             try:
-                player = await interaction.user.voice.channel.connect(cls=wavelink.Player)
+                player = await channel.connect(cls=wavelink.Player)
+            except wavelink.ChannelTimeoutException:
+                log.warning("Voice connect timed out for %s", channel)
+                return await interaction.followup.send(
+                    f"Timed out joining **{channel.name}**. Discord may be having "
+                    "voice issues, or the channel is restricted — try another one."
+                )
             except Exception:
                 log.exception("Voice connect failed")
                 return await interaction.followup.send("Couldn't join your voice channel.")

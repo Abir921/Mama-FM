@@ -1,0 +1,45 @@
+# Mama FM — bot + Lavalink, both restarting automatically.
+#   docker compose up -d       start (and start again on reboot)
+#   docker compose logs -f     watch output
+#   docker compose pull && docker compose up -d --build    update
+
+services:
+  lavalink:
+    image: ghcr.io/lavalink-devs/lavalink:4
+    restart: unless-stopped
+    environment:
+      # Bind all interfaces so the bot container can reach it. The port is
+      # deliberately not published, so it stays private to this network.
+      LAVALINK_ADDRESS: 0.0.0.0
+      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
+      YOUTUBE_REFRESH_TOKEN: ${YOUTUBE_REFRESH_TOKEN:-}
+      SERVER_PORT: 2333
+    volumes:
+      - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
+      - lavalink-plugins:/opt/Lavalink/plugins
+    healthcheck:
+      # Unauthorised (401) still proves the HTTP server is up and listening.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:2333/version || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Overrides the .env value, which points at localhost for local runs.
+      LAVALINK_URI: http://lavalink:2333
+      LAVALINK_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
+      MAMA_DB_PATH: /data/mama.db
+    volumes:
+      - bot-data:/data
+    depends_on:
+      lavalink:
+        condition: service_healthy
+
+volumes:
+  lavalink-plugins:
+  bot-data:

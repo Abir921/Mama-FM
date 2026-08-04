@@ -2,6 +2,8 @@
 
 Discord bot: music, memes, polls, Valorant stats. All commands live under `/mama`.
 
+Running it 24/7 on a free always-on server: see **[DEPLOY.md](DEPLOY.md)**.
+
 ## Setup
 
 1. **Python deps** (already installed into `.venv`):

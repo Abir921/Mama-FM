@@ -4,7 +4,10 @@ import os
 
 import aiosqlite
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mama.db")
+# Overridable so containers can point at a mounted volume that outlives them.
+DB_PATH = os.getenv("MAMA_DB_PATH") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "mama.db"
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS polls (

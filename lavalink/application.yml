@@ -1,10 +1,12 @@
 server:
   port: 2333
-  address: 127.0.0.1
+  # Loopback locally; containers must bind 0.0.0.0 to be reachable from the
+  # bot container. The port is never published outside the compose network.
+  address: "${LAVALINK_ADDRESS:127.0.0.1}"
 
 lavalink:
   server:
-    password: "youshallnotpass"
+    password: "${LAVALINK_PASSWORD:youshallnotpass}"
     sources:
       youtube: false   # built-in source is deprecated; youtube-plugin below replaces it
       soundcloud: true
